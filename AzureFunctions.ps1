@@ -48,21 +48,23 @@ function Get-BlobReferences {
     )
     
     $dateRegex = '(?<ServerName>[\x21-\x2e,\x30-\x7E]{1,254})\/(?<DatabaseName>[\x21-\x2e,\x30-\x7E]{1,254})\/(?<BackupType>FULL|DIFF|FULL_COPY_ONLY|LOG|LOG_COPY_ONLY)\/(?<filenamestart>\k<ServerName>_\k<DatabaseName>_\k<BackupType>)_(?<bkdate>[\d]{8}_[\d]{6})\.(?<FileExtension>bak|trn)'
+    $regExCompiled = New-Object Regex $dateRegex, 'Compiled'
 
     [BlobReference[]]$blobCollection = @()
     
     foreach ($blob in $blobs) {
-    if ($blob.Name -match $dateRegex) {
-        $objBlob = [BlobReference]@{
+	$mymatch = $regExCompiled.Match($blob.Name)
+	if ($mymatch.Success) {
+	    $objBlob = [BlobReference]@{
             name     = $blob.Name
-            bktype   = $Matches['BackupType']
-            database = $Matches['DatabaseName']
-            server   = $Matches['ServerName']
-            extension = $Matches['FileExtension']
-            bkdate   = [DateTime]::ParseExact($Matches['bkdate'], 'yyyyMMdd_HHmmss', [System.Globalization.CultureInfo]::InvariantCulture)
+            bktype   = $mymatch.Groups['BackupType'].Value
+            database = $mymatch.Groups['DatabaseName'].Value
+            server   = $mymatch.Groups['ServerName'].Value
+            extension = $mymatch.Groups['FileExtension'].Value
+            bkdate   = [DateTime]::ParseExact($mymatch.Groups['bkdate'].Value, 'yyyyMMdd_HHmmss', [System.Globalization.CultureInfo]::InvariantCulture)
         }
         $blobCollection += $objBlob
-    }
+	}
     else {
         Write-Warning "Non-conformant blob name: $($blob.Name)"}
     }
@@ -179,7 +181,7 @@ SELECT bs.backup_finish_date FROM [LastRestores] lr INNER JOIN backupset bs ON l
     return $backup_finish_date
 }
 
-Restore-LatestDatabase{
+function Restore-LatestDatabase{
     param
     (
         [parameter(Mandatory = $true)][ValidateNotNull()]
