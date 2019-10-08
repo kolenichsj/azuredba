@@ -61,6 +61,7 @@ function Get-BlobReferences {
             database = $mymatch.Groups['DatabaseName'].Value
             server   = $mymatch.Groups['ServerName'].Value
             extension = $mymatch.Groups['FileExtension'].Value
+            #filenamestart = $mymatch.Groups['filenamestart'].Value
             bkdate   = [DateTime]::ParseExact($mymatch.Groups['bkdate'].Value, 'yyyyMMdd_HHmmss', [System.Globalization.CultureInfo]::InvariantCulture)
         }
         $blobCollection += $objBlob
@@ -72,7 +73,7 @@ function Get-BlobReferences {
     return $blobCollection
 }
 
-function Restore-MostRecentFullDiff {
+function Restore-FullDiffFile {
 	param (
 		[string]$mostRecentFullFile,
 		[string]$mostRecentDiffFile,
@@ -207,8 +208,7 @@ function Restore-LatestDatabase{
 
     if ($UseCopyOnly){
         $mostRecentCopy = $blobCollection | Where-Object {$_.bktype -eq 'FULL_COPY_ONLY' -and $_.database -eq $databasename -and $serverList.Contains($_.server)} | Sort-Object {$_.bkdate} -Descending | Select-Object -First 1
-        Restore-MostRecentFullDiff -mostRecentFullFile $mostRecentCopy -DestinationServer $DestinationServer -StorageAccountName $StorageAccountName
-    
+        Restore-FullDiffFile -mostRecentFullFile $mostRecentCopy -DestinationServer $DestinationServer -StorageAccountName $StorageAccountName
     }
     else{
         $mostRecentFull = $blobCollection | Where-Object {$_.bktype -eq 'FULL' -and $_.database -eq $databasename -and $serverList.Contains($_.server)} | Sort-Object {$_.bkdate} -Descending | Select-Object -First 1
@@ -216,11 +216,29 @@ function Restore-LatestDatabase{
         $mostRecentFullFile = "$($azureURL)$($mostRecentFull.Name)"
         $mostRecentDiffFile = "$($azureURL)$($mostRecentDiff.Name)"
 
-        Restore-MostRecentFullDiff -mostRecentFullFile $mostRecentFullFile -mostRecentDiffFile $mostRecentDiffFile -DestinationServer $DestinationServer -StorageAccountName $StorageAccountName
+        Restore-FullDiffFile -mostRecentFullFile $mostRecentFullFile -mostRecentDiffFile $mostRecentDiffFile -DestinationServer $DestinationServer -StorageAccountName $StorageAccountName
     }
 
     $blobCollection = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context | Get-BlobReferences
     $StartDateTime = Get-BackupFinishDate -databasename $databasename -DestinationServer $DestinationServer
     $trnFiles = $blobCollection | Where-Object { $_.bktype -eq 'LOG' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -gt $StartDateTime } | Sort-object { $_.bkdate } | ForEach-Object { $azureURL + $_.name}
     Restore-TRNLogs  -databasename $databasename -DestinationServer $DestinationServer -trnfiles $trnfiles -StorageAccountName $StorageAccountName
+}
+
+function Remove-OldBlobs {
+    param
+    (
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$ContainerName,
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$SasToken,
+        [int]$keepMinimumCount = 4, # keep at least this many backups
+        [int]$keepMinimumDays = 30 # only delete older than this number of days
+    )
+
+    $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
+    $blobCollection = Get-AzStorageBlob -Context $context -Container $ContainerName | Get-BlobReferences
+    $grouped = $blobCollection | Group-Object -Property server,database,bktype | Where-Object {$_.count -gt $keepMinimumCount } 
+    $blobsToDelete = $grouped | ForEach-Object {$_.Group | Select-Object -First ($_.Count - $keepMinimumCount) | Where-Object {$_.LastModified -lt $deleteOlderThan } }
+    $blobsToDelete | ForEach-Object{Remove-AzStorageBlob -Blob $_.Name -Container $ContainerName -Context $context -WhatIf}
 }
