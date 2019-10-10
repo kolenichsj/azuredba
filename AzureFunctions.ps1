@@ -38,7 +38,7 @@ function Get-BlobsForDatabase {
         [Microsoft.WindowsAzure.Commands.Storage.AzureStorageContext]$Context
     )
    
-    return Get-AzStorageBlob -Context $context -Container $ContainerName -Blob "*$databasename*"
+    return Get-AzStorageBlob -Context $context -Container $ContainerName -Blob "*/$databasename/*"
 }
 
 function Get-BlobReferences {
