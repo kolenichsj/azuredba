@@ -164,6 +164,10 @@ function Restore-TRNLogs {
         Invoke-Sqlcmd -ServerInstance $DestinationServer -Database 'master' -Query $sqlRestore -Verbose
         #Restore-DbaDatabase -SqlInstance $DestinationServer -DatabaseName $databasename -Path $file -AzureCredential $StorageAccountName -WithReplace -BlockSize 512 -NoRecovery -Continue # -Verbose
     }
+
+    if ($NoRecovery -ne $true){
+        Restore-DbaDatabase -SqlInstance $DestinationServer -DatabaseName $databasename -Recover
+    }
 }
 
 function Get-BackupFinishDate {
@@ -176,7 +180,7 @@ function Get-BackupFinishDate {
     $theResult = Invoke-Sqlcmd -ServerInstance $DestinationServer -Database 'msdb' -query "WITH LastRestores AS (SELECT r.backup_set_id, RowNum = ROW_NUMBER() OVER (PARTITION BY d.Name ORDER BY r.[restore_date] DESC)
 FROM master.sys.databases d INNER JOIN msdb.dbo.[restorehistory] r ON r.[destination_database_name] = d.Name
 WHERE r.destination_database_name= '$databasename' )
-SELECT bs.backup_finish_date FROM [LastRestores] lr INNER JOIN backupset bs ON lr.backup_set_id = bs.backup_set_id WHERE [RowNum] = 1"
+SELECT bs.backup_finish_date FROM [LastRestores] lr INNER JOIN msdb.dbo.backupset bs ON lr.backup_set_id = bs.backup_set_id WHERE [RowNum] = 1"
 
     [DateTime]$backup_finish_date = $theResult[0]
     return $backup_finish_date
@@ -204,11 +208,12 @@ function Restore-LatestDatabase{
 
     $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
     $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
-    $blobCollection = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context | Get-BlobReferences
+    $blobCollection = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename | Get-BlobReferences
 
     if ($UseCopyOnly){
         $mostRecentCopy = $blobCollection | Where-Object {$_.bktype -eq 'FULL_COPY_ONLY' -and $_.database -eq $databasename -and $serverList.Contains($_.server)} | Sort-Object {$_.bkdate} -Descending | Select-Object -First 1
-        Restore-FullDiffFile -mostRecentFullFile $mostRecentCopy -DestinationServer $DestinationServer -StorageAccountName $StorageAccountName
+        $mostRecentCopyFile = "$($azureURL)$($mostRecentCopy.Name)"
+        Restore-FullDiffFile -mostRecentFullFile $mostRecentCopyFile -DestinationServer $DestinationServer -StorageAccountName $StorageAccountName
     }
     else{
         $mostRecentFull = $blobCollection | Where-Object {$_.bktype -eq 'FULL' -and $_.database -eq $databasename -and $serverList.Contains($_.server)} | Sort-Object {$_.bkdate} -Descending | Select-Object -First 1
@@ -219,10 +224,10 @@ function Restore-LatestDatabase{
         Restore-FullDiffFile -mostRecentFullFile $mostRecentFullFile -mostRecentDiffFile $mostRecentDiffFile -DestinationServer $DestinationServer -StorageAccountName $StorageAccountName
     }
 
-    $blobCollection = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context | Get-BlobReferences
+    $blobCollection = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename | Get-BlobReferences
     $StartDateTime = Get-BackupFinishDate -databasename $databasename -DestinationServer $DestinationServer
     $trnFiles = $blobCollection | Where-Object { $_.bktype -eq 'LOG' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -gt $StartDateTime } | Sort-object { $_.bkdate } | ForEach-Object { $azureURL + $_.name}
-    Restore-TRNLogs  -databasename $databasename -DestinationServer $DestinationServer -trnfiles $trnfiles -StorageAccountName $StorageAccountName
+    Restore-TRNLogs -databasename $databasename -DestinationServer $DestinationServer -trnfiles $trnfiles -StorageAccountName $StorageAccountName
 }
 
 function Remove-OldBlobs {
@@ -236,9 +241,10 @@ function Remove-OldBlobs {
         [int]$keepMinimumDays = 30 # only delete older than this number of days
     )
 
+    $deleteOlderThan = (Get-Date).AddDays( - $keepMinimumDays)
     $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
     $blobCollection = Get-AzStorageBlob -Context $context -Container $ContainerName | Get-BlobReferences
     $grouped = $blobCollection | Group-Object -Property server,database,bktype | Where-Object {$_.count -gt $keepMinimumCount } 
-    $blobsToDelete = $grouped | ForEach-Object {$_.Group | Select-Object -First ($_.Count - $keepMinimumCount) | Where-Object {$_.LastModified -lt $deleteOlderThan } }
+    $blobsToDelete = $grouped | ForEach-Object {$_.Group | Select-Object -First ($_.Count - $keepMinimumCount) | Where-Object {$_.bkdate -lt $deleteOlderThan } }
     $blobsToDelete | ForEach-Object{Remove-AzStorageBlob -Blob $_.Name -Container $ContainerName -Context $context -WhatIf}
 }
