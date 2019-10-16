@@ -18,14 +18,14 @@ class BlobReference {
 function Get-BlobsForServer {
     param(
         [parameter(Mandatory = $true)][ValidateNotNull()]
-        [string]$serverename,
+        [string]$servername,
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$ContainerName,
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [Microsoft.WindowsAzure.Commands.Storage.AzureStorageContext]$Context
     )
 
-   return Get-AzStorageBlob -Context $context -Container $ContainerName -Prefix $serverename
+   return Get-AzStorageBlob -Context $context -Container $ContainerName -Prefix $servername
 }
 
 function Get-BlobsForDatabase {
@@ -212,7 +212,7 @@ function Get-MostRecentCopyOnlyFile{
      return $mostRecentCopyFile
 }
 
-function Get-MostRecenFullDiffFile{
+function Get-MostRecentFullDiffFile{
     param(
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string[]]$serverList, 
@@ -251,6 +251,28 @@ function Get-MostRecenFullDiffFile{
     [Tuple[string,string]]$retvalue = New-Object "tuple[string, string]" $mostRecentFullFile,$mostRecentDiffFile
 
     return $retvalue
+}
+
+function Get-MostRecentCopyOnlyForServer {
+    param(
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$servername, 
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$ContainerName,
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$StorageAccountName,
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$SasToken
+    )
+    $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
+    $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
+    $blobs = Get-BlobsForServer -ContainerName $ContainerName -Context $Context -servername $servername
+    $blobCollection = Get-BlobReferences -blobs $blobs
+    $grouped = $blobCollection | Where-Object {$_.bktype -eq 'FULL_COPY_ONLY' }| Group-Object -Property server,database,bktype | Sort-Object {$_.bkdate} -Descending
+    #$blobsToDelete = $grouped | ForEach-Object {$_.Group | Select-Object -First ($_.Count - $keepMinimumCount) | Where-Object {$_.bkdate -lt $deleteOlderThan } }
+    $mostRecentCopys = $grouped | ForEach-Object {$_.Group | Select-Object -First 1}
+    $mostRecentCopyFiles = $mostRecentCopys | ForEach-Object { "$($azureURL)$($_.Name)"}
+    return $mostRecentCopyFiles
 }
 
 function Restore-LatestDatabase{
@@ -325,4 +347,3 @@ function Remove-OldBlobs {
     $blobsToDelete = $grouped | ForEach-Object {$_.Group | Select-Object -First ($_.Count - $keepMinimumCount) | Where-Object {$_.bkdate -lt $deleteOlderThan } }
     $blobsToDelete | ForEach-Object{Remove-AzStorageBlob -Blob $_.Name -Container $ContainerName -Context $context -WhatIf}
 }
-
