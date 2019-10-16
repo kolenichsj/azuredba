@@ -37,7 +37,6 @@ function Get-BlobsForDatabase {
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [Microsoft.WindowsAzure.Commands.Storage.AzureStorageContext]$Context
     )
-   
     return Get-AzStorageBlob -Context $context -Container $ContainerName -Blob "*/$databasename/*"
 }
 
@@ -53,23 +52,24 @@ function Get-BlobReferences {
     [BlobReference[]]$blobCollection = @()
     
     foreach ($blob in $blobs) {
-	$mymatch = $regExCompiled.Match($blob.Name)
-	if ($mymatch.Success) {
-	    $objBlob = [BlobReference]@{
-            name     = $blob.Name
-            bktype   = $mymatch.Groups['BackupType'].Value
-            database = $mymatch.Groups['DatabaseName'].Value
-            server   = $mymatch.Groups['ServerName'].Value
-            extension = $mymatch.Groups['FileExtension'].Value
-            #filenamestart = $mymatch.Groups['filenamestart'].Value
-            bkdate   = [DateTime]::ParseExact($mymatch.Groups['bkdate'].Value, 'yyyyMMdd_HHmmss', [System.Globalization.CultureInfo]::InvariantCulture)
+        $mymatch = $regExCompiled.Match($blob.Name)
+	    if ($mymatch.Success) {
+    	    $objBlob = [BlobReference]@{
+                name     = $blob.Name
+                bktype   = $mymatch.Groups['BackupType'].Value
+                database = $mymatch.Groups['DatabaseName'].Value
+                server   = $mymatch.Groups['ServerName'].Value
+                extension = $mymatch.Groups['FileExtension'].Value
+                #filenamestart = $mymatch.Groups['filenamestart'].Value
+                bkdate   = [DateTime]::ParseExact($mymatch.Groups['bkdate'].Value, 'yyyyMMdd_HHmmss', [System.Globalization.CultureInfo]::InvariantCulture)
+            }
+            $blobCollection += $objBlob
+	    }
+        else {
+            Write-Warning "Non-conformant blob name: $($blob.Name)"
         }
-        $blobCollection += $objBlob
-	}
-    else {
-        Write-Warning "Non-conformant blob name: $($blob.Name)"}
     }
-
+    
     return $blobCollection
 }
 
@@ -135,7 +135,7 @@ function Restore-FullDiffFile {
     try
     {
         Restore-DbaDatabase -SqlInstance $DestinationServer -DatabaseName $DestinationDBName -Path $mostRecentFullFile -FileMapping $FileMapping -AzureCredential $StorageAccountName -WithReplace  -NoRecovery
-        if ('' -ne $mostRecentDiffFile) {
+        if ([string]::IsNullOrEmpty($mostRecentDiffFile) -ne $true) {
 		    Restore-DbaDatabase -SqlInstance $DestinationServer -DatabaseName $DestinationDBName -Path $mostRecentDiffFile -FileMapping $FileMapping -AzureCredential $StorageAccountName
 		}
     }
@@ -186,6 +186,73 @@ SELECT bs.backup_finish_date FROM [LastRestores] lr INNER JOIN msdb.dbo.backupse
     return $backup_finish_date
 }
 
+function Get-MostRecentCopyOnlyFile{
+    param(
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string[]]$serverList, 
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$databasename, 
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$ContainerName,
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$StorageAccountName,
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$SasToken
+    )
+    $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
+    $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
+    $blobs = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename
+    $blobCollection =  Get-BlobReferences -blobs $blobs
+    $mostRecentCopy = $blobCollection | Where-Object {$_.bktype -eq 'FULL_COPY_ONLY' -and $_.database -eq $databasename -and $serverList.Contains($_.server)} | Sort-Object {$_.bkdate} -Descending | Select-Object -First 1
+    if ([string]::IsNullOrEmpty($mostRecentCopy)){
+        Write-Error "Unable to find file for `$databasename: $databasename`r`n`$serverList: $serverList"
+    }
+
+     $mostRecentCopyFile = "$($azureURL)$($mostRecentCopy.Name)"
+     return $mostRecentCopyFile
+}
+
+function Get-MostRecenFullDiffFile{
+    param(
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string[]]$serverList, 
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$databasename, 
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$ContainerName,
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$StorageAccountName,
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$SasToken
+    )
+    
+    $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
+    $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
+    $blobs = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename 
+    $blobCollection = Get-BlobReferences -blobs $blobs
+    $mostRecentFull = $blobCollection | Where-Object {$_.bktype -eq 'FULL' -and $_.database -eq $databasename -and $serverList.Contains($_.server)} | Sort-Object {$_.bkdate} -Descending | Select-Object -First 1
+    if ([string]::IsNullOrEmpty($mostRecentFull.Name)){
+        Write-Error "Could not find full backup for $database"
+        $mostRecentFullFile = [string]::Empty
+        $mostRecentDiffFile = [string]::Empty
+    }
+    else{
+        $mostRecentFullFile = "$($azureURL)$($mostRecentFull.Name)"
+        $mostRecentDiff = $blobCollection | Where-Object {$_.bktype -eq 'DIFF' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -gt $mostRecentFull.bkdate} | Sort-object {$_.bkdate} -Descending | Select-Object -First 1
+        if ([string]::IsNullOrEmpty($mostRecentDiff.Name)){
+            $mostRecentDiffFile = [string]::Empty
+        }
+        else{
+            $mostRecentDiffFile = "$($azureURL)$($mostRecentDiff.Name)"
+        }
+    }
+     
+    Write-Verbose "$($mostRecentFullFile): $mostRecentFullFile`r`n$($mostRecentDiffFile): $mostRecentDiffFile"
+    [Tuple[string,string]]$retvalue = New-Object "tuple[string, string]" $mostRecentFullFile,$mostRecentDiffFile
+
+    return $retvalue
+}
+
 function Restore-LatestDatabase{
     param
     (
@@ -208,11 +275,18 @@ function Restore-LatestDatabase{
 
     $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
     $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
-    $blobCollection = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename | Get-BlobReferences
-
+    $blobs = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename
+    $blobCollection =  Get-BlobReferences -blobs $blobs
+    Write-Verbose "blob count: $($blobCollection.Count())`r`n `$databasename: $databasename`r`n`$serverList: $serverList"
+    
     if ($UseCopyOnly){
         $mostRecentCopy = $blobCollection | Where-Object {$_.bktype -eq 'FULL_COPY_ONLY' -and $_.database -eq $databasename -and $serverList.Contains($_.server)} | Sort-Object {$_.bkdate} -Descending | Select-Object -First 1
+        if ([string]::IsNullOrEmpty($mostRecentCopy)){
+           Write-Error "Unable to find file for `$databasename: $databasename`r`n`$serverList: $serverList"
+        }
+
         $mostRecentCopyFile = "$($azureURL)$($mostRecentCopy.Name)"
+        Write-Verbose "$($mostRecentCopyFile): $mostRecentCopyFile"
         Restore-FullDiffFile -mostRecentFullFile $mostRecentCopyFile -DestinationServer $DestinationServer -StorageAccountName $StorageAccountName
     }
     else{
@@ -221,10 +295,12 @@ function Restore-LatestDatabase{
         $mostRecentFullFile = "$($azureURL)$($mostRecentFull.Name)"
         $mostRecentDiffFile = "$($azureURL)$($mostRecentDiff.Name)"
 
+        Write-Verbose "$($mostRecentFullFile): $mostRecentFullFile`r`n$($mostRecentDiffFile): $mostRecentDiffFile"
         Restore-FullDiffFile -mostRecentFullFile $mostRecentFullFile -mostRecentDiffFile $mostRecentDiffFile -DestinationServer $DestinationServer -StorageAccountName $StorageAccountName
     }
 
-    $blobCollection = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename | Get-BlobReferences
+    $blobs = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename
+    $blobCollection =  Get-BlobReferences -blobs $blobs
     $StartDateTime = Get-BackupFinishDate -databasename $databasename -DestinationServer $DestinationServer
     $trnFiles = $blobCollection | Where-Object { $_.bktype -eq 'LOG' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -gt $StartDateTime } | Sort-object { $_.bkdate } | ForEach-Object { $azureURL + $_.name}
     Restore-TRNLogs -databasename $databasename -DestinationServer $DestinationServer -trnfiles $trnfiles -StorageAccountName $StorageAccountName
@@ -243,8 +319,10 @@ function Remove-OldBlobs {
 
     $deleteOlderThan = (Get-Date).AddDays( - $keepMinimumDays)
     $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
-    $blobCollection = Get-AzStorageBlob -Context $context -Container $ContainerName | Get-BlobReferences
+    $blobs = Get-AzStorageBlob -Context $context -Container $ContainerName
+    $blobCollection = Get-BlobReferences -blobs $blobs
     $grouped = $blobCollection | Group-Object -Property server,database,bktype | Where-Object {$_.count -gt $keepMinimumCount } 
     $blobsToDelete = $grouped | ForEach-Object {$_.Group | Select-Object -First ($_.Count - $keepMinimumCount) | Where-Object {$_.bkdate -lt $deleteOlderThan } }
     $blobsToDelete | ForEach-Object{Remove-AzStorageBlob -Blob $_.Name -Container $ContainerName -Context $context -WhatIf}
 }
+
