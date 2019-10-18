@@ -223,32 +223,38 @@ function Get-MostRecentFullDiffFile{
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$StorageAccountName,
         [parameter(Mandatory = $true)][ValidateNotNull()]
-        [string]$SasToken
+        [string]$SasToken,
+        [switch]$AsURL
     )
     
-    $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
     $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
     $blobs = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename 
     $blobCollection = Get-BlobReferences -blobs $blobs
     $mostRecentFull = $blobCollection | Where-Object {$_.bktype -eq 'FULL' -and $_.database -eq $databasename -and $serverList.Contains($_.server)} | Sort-Object {$_.bkdate} -Descending | Select-Object -First 1
     if ([string]::IsNullOrEmpty($mostRecentFull.Name)){
         Write-Error "Could not find full backup for $database"
-        $mostRecentFullFile = [string]::Empty
-        $mostRecentDiffFile = [string]::Empty
     }
     else{
-        $mostRecentFullFile = "$($azureURL)$($mostRecentFull.Name)"
         $mostRecentDiff = $blobCollection | Where-Object {$_.bktype -eq 'DIFF' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -gt $mostRecentFull.bkdate} | Sort-object {$_.bkdate} -Descending | Select-Object -First 1
+    }
+
+    if ($AsURL){
+        $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
+        $mostRecentFullFile = "$($azureURL)$($mostRecentFull.Name)"
         if ([string]::IsNullOrEmpty($mostRecentDiff.Name)){
             $mostRecentDiffFile = [string]::Empty
         }
         else{
             $mostRecentDiffFile = "$($azureURL)$($mostRecentDiff.Name)"
         }
+            
+        Write-Verbose "$($mostRecentFullFile): $mostRecentFullFile`r`n$($mostRecentDiffFile): $mostRecentDiffFile"
+        [Tuple[string,string]]$retvalue = New-Object "tuple[string, string]" $mostRecentFullFile,$mostRecentDiffFile
     }
-     
-    Write-Verbose "$($mostRecentFullFile): $mostRecentFullFile`r`n$($mostRecentDiffFile): $mostRecentDiffFile"
-    [Tuple[string,string]]$retvalue = New-Object "tuple[string, string]" $mostRecentFullFile,$mostRecentDiffFile
+    else{
+        Write-Verbose "mostRecentFullFile: $($mostRecentFull.Name)`r`nmostRecentDiffFile: $($mostRecentDiff.Name)"
+        [Tuple[string,string]]$retvalue = New-Object "tuple[string, string]" $mostRecentFull.Name,$mostRecentDiff.Name
+    }
 
     return $retvalue
 }
@@ -262,16 +268,24 @@ function Get-MostRecentCopyOnlyForServer {
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$StorageAccountName,
         [parameter(Mandatory = $true)][ValidateNotNull()]
-        [string]$SasToken
+        [string]$SasToken,
+        [switch]$AsURL
     )
-    $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
     $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
     $blobs = Get-BlobsForServer -ContainerName $ContainerName -Context $Context -servername $servername
     $blobCollection = Get-BlobReferences -blobs $blobs
     $grouped = $blobCollection | Where-Object {$_.bktype -eq 'FULL_COPY_ONLY' }| Group-Object -Property server,database,bktype | Sort-Object {$_.bkdate} -Descending
     #$blobsToDelete = $grouped | ForEach-Object {$_.Group | Select-Object -First ($_.Count - $keepMinimumCount) | Where-Object {$_.bkdate -lt $deleteOlderThan } }
     $mostRecentCopys = $grouped | ForEach-Object {$_.Group | Select-Object -First 1}
-    $mostRecentCopyFiles = $mostRecentCopys | ForEach-Object { "$($azureURL)$($_.Name)"}
+    if ($AsURL)
+    {
+        $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
+        $mostRecentCopyFiles = $mostRecentCopys | ForEach-Object { "$($azureURL)$($_.Name)"}
+    }
+    else {
+        $mostRecentCopyFiles = $mostRecentCopys | ForEach-Object { $_.Name }
+    }
+
     return $mostRecentCopyFiles
 }
 
