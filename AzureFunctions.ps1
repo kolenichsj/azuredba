@@ -271,12 +271,13 @@ function Get-MostRecentCopyOnlyForServer {
         [string]$SasToken,
         [switch]$AsURL
     )
+
     $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
     $blobs = Get-BlobsForServer -ContainerName $ContainerName -Context $Context -servername $servername
     $blobCollection = Get-BlobReferences -blobs $blobs
     $grouped = $blobCollection | Where-Object {$_.bktype -eq 'FULL_COPY_ONLY' }| Group-Object -Property server,database,bktype | Sort-Object {$_.bkdate} -Descending
-    #$blobsToDelete = $grouped | ForEach-Object {$_.Group | Select-Object -First ($_.Count - $keepMinimumCount) | Where-Object {$_.bkdate -lt $deleteOlderThan } }
     $mostRecentCopys = $grouped | ForEach-Object {$_.Group | Select-Object -First 1}
+
     if ($AsURL)
     {
         $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
@@ -287,6 +288,43 @@ function Get-MostRecentCopyOnlyForServer {
     }
 
     return $mostRecentCopyFiles
+}
+
+function Get-MostRecentFullDiffForServer {
+    param(
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$servername, 
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$ContainerName,
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$StorageAccountName,
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$SasToken,
+        [switch]$AsURL
+    )
+
+    $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
+    $blobs = Get-BlobsForServer -ContainerName $ContainerName -Context $Context -servername $servername
+    $blobCollection = Get-BlobReferences -blobs $blobs
+    $grouped = $blobCollection | Where-Object {$_.bktype -eq 'FULL' -or $_.bktype -eq 'DIFF' } | Group-Object -Property database | Sort-Object {$_.bkdate} -Descending
+
+    if ($AsURL){
+        $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
+        $retval = $grouped | ForEach-Object {
+            $mostRecentFull = $_.Group | Where-Object {$_.bktype -eq 'FULL' } | Sort-Object {$_.bkdate} -Descending | Select-Object -First 1
+            $mostRecentDiff = $_.Group | Where-Object {$_.bktype -eq 'DIFF' -and $_.bkdate -gt $mostRecentFull.bkdate  } | Sort-Object {$_.bkdate} -Descending | Select-Object -First 1
+            New-Object "tuple[string, string]" "$($azureURL)$($mostRecentFull.Name)","$($azureURL)$($mostRecentDiff.Name)"
+        }
+    }
+    else{
+        $retval = $grouped | ForEach-Object {
+            $mostRecentFull = $_.Group | Where-Object {$_.bktype -eq 'FULL' } | Sort-Object {$_.bkdate} -Descending | Select-Object -First 1
+            $mostRecentDiff = $_.Group | Where-Object {$_.bktype -eq 'DIFF' -and $_.bkdate -gt $mostRecentFull.bkdate  } | Sort-Object {$_.bkdate} -Descending | Select-Object -First 1
+            New-Object "tuple[string, string]" $mostRecentFull.Name,$mostRecentDiff.Name
+        }
+    }
+
+    return $retval
 }
 
 function Restore-LatestDatabase{
