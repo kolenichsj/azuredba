@@ -197,7 +197,8 @@ function Get-MostRecentCopyOnlyFile{
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$StorageAccountName,
         [parameter(Mandatory = $true)][ValidateNotNull()]
-        [string]$SasToken
+        [string]$SasToken,
+        [switch]$AsURL
     )
     $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
     $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
@@ -207,9 +208,16 @@ function Get-MostRecentCopyOnlyFile{
     if ([string]::IsNullOrEmpty($mostRecentCopy)){
         Write-Error "Unable to find file for `$databasename: $databasename`r`n`$serverList: $serverList"
     }
-
-     $mostRecentCopyFile = "$($azureURL)$($mostRecentCopy.Name)"
-     return $mostRecentCopyFile
+	
+	if ($AsURL){
+		$azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
+		$mostRecentCopyFile = "$($azureURL)$($mostRecentCopy.Name)"
+    }
+	else{
+		$mostRecentCopyFile = $mostRecentCopy.Name
+	}
+	
+	return $mostRecentCopyFile
 }
 
 function Get-MostRecentFullDiffFile{
@@ -290,7 +298,7 @@ function Get-MostRecentCopyOnlyForServer {
     return $mostRecentCopyFiles
 }
 
-function Get-MostRecentFullDiffForServer {
+function Get-MostRecentFullDiffFilesForServer {
     param(
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$servername, 
