@@ -134,10 +134,14 @@ function Restore-FullDiffFile {
 
     try
     {
-        Restore-DbaDatabase -SqlInstance $DestinationServer -DatabaseName $DestinationDBName -Path $mostRecentFullFile -FileMapping $FileMapping -AzureCredential $StorageAccountName -WithReplace  -NoRecovery
-        if ([string]::IsNullOrEmpty($mostRecentDiffFile) -ne $true) {
-		    Restore-DbaDatabase -SqlInstance $DestinationServer -DatabaseName $DestinationDBName -Path $mostRecentDiffFile -FileMapping $FileMapping -AzureCredential $StorageAccountName
-		}
+        $restoreFiles = @{}
+        $restoreFiles+=$mostRecentFullFile
+
+        if (-Not [string]::IsNullOrEmpty($mostRecentDiffFile)) {
+            $restoreFiles+=$mostRecentDiffFile
+        }
+
+        Restore-DbaDatabase -SqlInstance $DestinationServer -DatabaseName $DestinationDBName -Path $restoreFiles -FileMapping $FileMapping -AzureCredential $StorageAccountName -WithReplace  -NoRecovery
     }
     catch 
     {
