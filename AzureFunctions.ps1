@@ -198,12 +198,12 @@ function Get-MostRecentCopyOnlyFile {
         [switch]$AsURL
     )
 
-    if ($null -eq $blobs) {
+    if (-not [string]::IsNullOrEmpty($SasToken) ) {
         $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
         $blobs = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename
     }
 
-    if ($null -eq $blobCollection) {
+    if ($null -ne $blobs) {
         $blobCollection = Get-BlobReferences -blobs $blobs
     }
 
@@ -243,17 +243,17 @@ function Get-MostRecentFullDiffFile {
         [switch]$AsURL
     )
     
-    if ($null -eq $blobs) {
+    if (-not [string]::IsNullOrEmpty($SasToken) ) {
         $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
         $blobs = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename 
     }
     
-
-    if ($null -eq $blobCollection) {
+    if ($null -ne $blobs) {
         $blobCollection = Get-BlobReferences -blobs $blobs
     }
     
     $mostRecentFull = $blobCollection | Where-Object { $_.bktype -eq 'FULL' -and $_.database -eq $databasename -and $serverList.Contains($_.server) } | Sort-Object { $_.bkdate } -Descending | Select-Object -First 1
+
     if ([string]::IsNullOrEmpty($mostRecentFull.Name)) {
         Write-Error "Could not find full backup for $database"
     }
