@@ -173,12 +173,16 @@ function Restore-TRNLogs {
         [string]$DestinationServer,
         [parameter(Mandatory = $true)]
         [string]$StorageAccountName,
+        [datetime]$stopAtDate,
         [string[]]$trnfiles,
         [bool]$NoRecovery = $false
     )
 
     foreach ($file in $trnfiles) {
         $sqlRestore = "Restore DATABASE [$databasename] FROM URL = '$file'  WITH  CREDENTIAL ='$StorageAccountName', REPLACE, NoRecovery, BLOCKSIZE = 512"
+        if ($null -ne $stopAtDate) {
+            $sqlRestore += "STOPAT = '$stopAtDate'"
+        }
         Write-Host $sqlRestore
         Invoke-Sqlcmd -ServerInstance $DestinationServer -Database 'master' -Query $sqlRestore -Verbose
         #Restore-DbaDatabase -SqlInstance $DestinationServer -DatabaseName $databasename -Path $file -AzureCredential $StorageAccountName -WithReplace -BlockSize 512 -NoRecovery -Continue # -Verbose
@@ -351,7 +355,7 @@ function Get-MostRecentFullDiffFilesForServer {
         [string]$ContainerName,
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$StorageAccountName,
-        [datetime]$PriorToDate = $null,
+        [datetime]$PriorToDate,
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$SasToken,
         [switch]$AsURL
@@ -382,6 +386,44 @@ function Get-MostRecentFullDiffFilesForServer {
     }
 
     return $retval
+}
+
+function Get-TRNFiles {
+    param
+    (        
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$servername, 
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$databasename,
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [datetime]$StartDateTime,
+        [datetime]$PriorToDate, 
+        [parameter(ParameterSetName = 'Token')][ValidateNotNull()]
+        [string]$SasToken,
+        [parameter(ParameterSetName = 'Blobs')]
+        [Microsoft.WindowsAzure.Commands.Common.Storage.ResourceModel.AzureStorageBlob[]]$blobs,
+        [parameter(ParameterSetName = 'BlobCollection')]
+        [BlobReference[]]$blobCollection,
+        [switch]$AsURL
+    )
+
+    if (-not [string]::IsNullOrEmpty($SasToken) ) {
+        $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
+        $blobs = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename
+    }
+
+    if ($null -ne $blobs) {
+        $blobCollection = Get-BlobReferences -blobs $blobs
+    }
+
+
+    if ($null -eq $PriorToDate) {
+        $PriorToDate = Get-Date
+    }
+
+    $trnFiles = $blobCollection | Where-Object { $_.bktype -eq 'LOG' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -gt $StartDateTime -and $_.bkdate -le $PriorToDate } | Sort-object { $_.bkdate } | ForEach-Object { $azureURL + $_.name }
+
+    return $trnFiles
 }
 
 function Restore-LatestDatabase {
