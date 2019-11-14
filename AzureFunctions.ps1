@@ -85,11 +85,11 @@ function Get-BlobReferences2 {
         
         $objBlob = [BlobReference]@{
             name      = $blob.Name
-            server = $myFilePath[0]
-            database = $myFilePath[1]
-            bktype = $myFilePath[2]
-            bkdate = [DateTime]::ParseExact($myFilePath[3].Substring($myFilePath[3].Length - 19,15)  , 'yyyyMMdd_HHmmss', [System.Globalization.CultureInfo]::InvariantCulture)
-            extension = $myFilePath[3].Substring($myFilePath[3].Length-3)
+            server    = $myFilePath[0]
+            database  = $myFilePath[1]
+            bktype    = $myFilePath[2]
+            bkdate    = [DateTime]::ParseExact($myFilePath[3].Substring($myFilePath[3].Length - 19, 15)  , 'yyyyMMdd_HHmmss', [System.Globalization.CultureInfo]::InvariantCulture)
+            extension = $myFilePath[3].Substring($myFilePath[3].Length - 3)
         }
         
         $blobCollection += $objBlob
@@ -260,6 +260,7 @@ function Get-MostRecentFullDiffFile {
         [string]$ContainerName,
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$StorageAccountName,
+        [datetime]$PriorToDate,
         [parameter(ParameterSetName = 'Token')][ValidateNotNull()]
         [string]$SasToken,
         [parameter(ParameterSetName = 'Blobs')]
@@ -273,18 +274,22 @@ function Get-MostRecentFullDiffFile {
         $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
         $blobs = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename 
     }
+
+    if ($null -eq $PriorToDate) {
+        $PriorToDate = Get-Date
+    }    
     
     if ($null -ne $blobs) {
         $blobCollection = Get-BlobReferences -blobs $blobs
     }
     
-    $mostRecentFull = $blobCollection | Where-Object { $_.bktype -eq 'FULL' -and $_.database -eq $databasename -and $serverList.Contains($_.server) } | Sort-Object { $_.bkdate } -Descending | Select-Object -First 1
+    $mostRecentFull = $blobCollection | Where-Object { $_.bktype -eq 'FULL' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -le $PriorToDate } | Sort-Object { $_.bkdate } -Descending | Select-Object -First 1
 
     if ([string]::IsNullOrEmpty($mostRecentFull.Name)) {
         Write-Error "Could not find full backup for $database"
     }
     else {
-        $mostRecentDiff = $blobCollection | Where-Object { $_.bktype -eq 'DIFF' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -gt $mostRecentFull.bkdate } | Sort-object { $_.bkdate } -Descending | Select-Object -First 1
+        $mostRecentDiff = $blobCollection | Where-Object { $_.bktype -eq 'DIFF' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -le $PriorToDate -and $_.bkdate -gt $mostRecentFull.bkdate } | Sort-object { $_.bkdate } -Descending | Select-Object -First 1
     }
 
     if ($AsURL) {
@@ -346,6 +351,7 @@ function Get-MostRecentFullDiffFilesForServer {
         [string]$ContainerName,
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$StorageAccountName,
+        [datetime]$PriorToDate = $null,
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$SasToken,
         [switch]$AsURL
@@ -355,21 +361,24 @@ function Get-MostRecentFullDiffFilesForServer {
     $blobs = Get-BlobsForServer -ContainerName $ContainerName -Context $Context -servername $servername
     $blobCollection = Get-BlobReferences -blobs $blobs
     $grouped = $blobCollection | Where-Object { $_.bktype -eq 'FULL' -or $_.bktype -eq 'DIFF' } | Group-Object -Property database | Sort-Object { $_.bkdate } -Descending
+    if ($null -eq $PriorToDate) {
+        $PriorToDate = Get-Date
+    }
+
+    $grpfd = $grouped | ForEach-Object {
+        $mostRecentFull = $_.Group | Where-Object { $_.bktype -eq 'FULL' -and $_.bkdate -le $PriorToDate } | Sort-Object { $_.bkdate } -Descending | Select-Object -First 1
+        $mostRecentDiff = $_.Group | Where-Object { $_.bktype -eq 'DIFF' -and $_.bkdate -ge $mostRecentFull.bkdate -and $_.bkdate -lt $PriorToDate } | Sort-Object { $_.bkdate } -Descending | Select-Object -First 1
+        New-Object "tuple[string, string]" $mostRecentFull.Name, $mostRecentDiff.Name
+    }
 
     if ($AsURL) {
         $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
-        $retval = $grouped | ForEach-Object {
-            $mostRecentFull = $_.Group | Where-Object { $_.bktype -eq 'FULL' } | Sort-Object { $_.bkdate } -Descending | Select-Object -First 1
-            $mostRecentDiff = $_.Group | Where-Object { $_.bktype -eq 'DIFF' -and $_.bkdate -gt $mostRecentFull.bkdate } | Sort-Object { $_.bkdate } -Descending | Select-Object -First 1
-            New-Object "tuple[string, string]" "$($azureURL)$($mostRecentFull.Name)", "$($azureURL)$($mostRecentDiff.Name)"
+        $retval = $grpfd | ForEach-Object {
+            New-Object "tuple[string, string]" "$($azureURL)$($grpfd.Item1)", "$($azureURL)$($grpfd.Item2)"
         }
     }
     else {
-        $retval = $grouped | ForEach-Object {
-            $mostRecentFull = $_.Group | Where-Object { $_.bktype -eq 'FULL' } | Sort-Object { $_.bkdate } -Descending | Select-Object -First 1
-            $mostRecentDiff = $_.Group | Where-Object { $_.bktype -eq 'DIFF' -and $_.bkdate -gt $mostRecentFull.bkdate } | Sort-Object { $_.bkdate } -Descending | Select-Object -First 1
-            New-Object "tuple[string, string]" $mostRecentFull.Name, $mostRecentDiff.Name
-        }
+        $retval = $grpfd
     }
 
     return $retval
