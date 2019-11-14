@@ -45,7 +45,8 @@ function Get-BlobReferences {
         [Microsoft.WindowsAzure.Commands.Common.Storage.ResourceModel.AzureStorageBlob[]]$blobs
     )
     
-    $dateRegex = '(?<ServerName>[\x21-\x2e,\x30-\x7E]{1,254})\/(?<DatabaseName>[\x21-\x2e,\x30-\x7E]{1,254})\/(?<BackupType>FULL|DIFF|FULL_COPY_ONLY|LOG|LOG_COPY_ONLY)\/(?<filenamestart>\k<ServerName>_\k<DatabaseName>_\k<BackupType>)_(?<bkdate>[\d]{8}_[\d]{6})\.(?<FileExtension>bak|trn)'
+    #$dateRegex = '(?<ServerName>[\x21-\x2e,\x30-\x7E]{1,254})\/(?<DatabaseName>[\x21-\x2e,\x30-\x7E]{1,254})\/(?<BackupType>LOG|FULL|DIFF|FULL_COPY_ONLY|LOG_COPY_ONLY)\/(?:\k<ServerName>_\k<DatabaseName>_\k<BackupType>)_(?<bkdate>[\d]{8}_[\d]{6})\.(?<FileExtension>bak|trn)'
+    $dateRegex = '^(?<ServerName>[^\/]{1,254})\/(?<DatabaseName>[^\/]{1,254})\/(?<BackupType>LOG|DIFF|FULL|FULL_COPY_ONLY|LOG_COPY_ONLY)\/(?:\k<ServerName>_\k<DatabaseName>_\k<BackupType>)_(?<bkdate>[\d]{8}_[\d]{6})\.(?<FileExtension>trn|bak)$'
     $regExCompiled = New-Object Regex $dateRegex, 'Compiled'
 
     [BlobReference[]]$blobCollection = @()
@@ -59,7 +60,6 @@ function Get-BlobReferences {
                 database  = $mymatch.Groups['DatabaseName'].Value
                 server    = $mymatch.Groups['ServerName'].Value
                 extension = $mymatch.Groups['FileExtension'].Value
-                #filenamestart = $mymatch.Groups['filenamestart'].Value
                 bkdate    = [DateTime]::ParseExact($mymatch.Groups['bkdate'].Value, 'yyyyMMdd_HHmmss', [System.Globalization.CultureInfo]::InvariantCulture)
             }
             $blobCollection += $objBlob
@@ -67,6 +67,32 @@ function Get-BlobReferences {
         else {
             Write-Warning "Non-conformant blob name: $($blob.Name)"
         }
+    }
+    
+    return $blobCollection
+}
+
+function Get-BlobReferences2 {
+    param (
+        [parameter(ValueFromPipeline)]
+        [Microsoft.WindowsAzure.Commands.Common.Storage.ResourceModel.AzureStorageBlob[]]$blobs
+    )
+    
+    [BlobReference[]]$blobCollection = @()
+    
+    foreach ($blob in $blobs) {
+        $myFilePath = $blob.Name.Split('/')
+        
+        $objBlob = [BlobReference]@{
+            name      = $blob.Name
+            server = $myFilePath[0]
+            database = $myFilePath[1]
+            bktype = $myFilePath[2]
+            bkdate = [DateTime]::ParseExact($myFilePath[3].Substring($myFilePath[3].Length - 19,15)  , 'yyyyMMdd_HHmmss', [System.Globalization.CultureInfo]::InvariantCulture)
+            extension = $myFilePath[3].Substring($myFilePath[3].Length-3)
+        }
+        
+        $blobCollection += $objBlob
     }
     
     return $blobCollection
@@ -408,6 +434,8 @@ function Remove-OldBlobs {
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$ContainerName,
         [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$StorageAccountName,
+        [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$SasToken,
         [int]$keepMinimumCount = 4, # keep at least this many backups
         [int]$keepMinimumDays = 30 # only delete older than this number of days
@@ -415,7 +443,7 @@ function Remove-OldBlobs {
 
     $deleteOlderThan = (Get-Date).AddDays( - $keepMinimumDays)
     $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
-    $blobs = Get-AzStorageBlob -Context $context -Container $ContainerName
+    $blobs = Get-AzStorageBlob -Context $Context -Container $ContainerName
     $blobCollection = Get-BlobReferences -blobs $blobs
     $grouped = $blobCollection | Group-Object -Property server, database, bktype | Where-Object { $_.count -gt $keepMinimumCount } 
     $blobsToDelete = $grouped | ForEach-Object { $_.Group | Select-Object -First ($_.Count - $keepMinimumCount) | Where-Object { $_.bkdate -lt $deleteOlderThan } }
