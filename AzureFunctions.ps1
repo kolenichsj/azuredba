@@ -175,20 +175,26 @@ function Restore-TRNLogs {
         [string]$StorageAccountName,
         [datetime]$stopAtDate,
         [string[]]$trnfiles,
+        [bool]$PrintOnly = $false,
         [bool]$NoRecovery = $false
     )
 
     foreach ($file in $trnfiles) {
-        $sqlRestore = "Restore DATABASE [$databasename] FROM URL = '$file'  WITH  CREDENTIAL ='$StorageAccountName', REPLACE, NoRecovery, BLOCKSIZE = 512"
+        $sqlRestore = "Restore DATABASE [$databasename] FROM URL = '$file'  WITH  CREDENTIAL ='$StorageAccountName', REPLACE, NoRecovery, BLOCKSIZE = 512" # BLOCKSIZE = 4096
         if ($null -ne $stopAtDate) {
             $sqlRestore += "STOPAT = '$stopAtDate'"
         }
+        
         Write-Host $sqlRestore
-        Invoke-Sqlcmd -ServerInstance $DestinationServer -Database 'master' -Query $sqlRestore -Verbose
+        
+        if (-not $PrintOnly) {
+            Invoke-Sqlcmd -ServerInstance $DestinationServer -Database 'master' -Query $sqlRestore -Verbose
+        }
+
         #Restore-DbaDatabase -SqlInstance $DestinationServer -DatabaseName $databasename -Path $file -AzureCredential $StorageAccountName -WithReplace -BlockSize 512 -NoRecovery -Continue # -Verbose
     }
 
-    if ($NoRecovery -ne $true) {
+    if ($NoRecovery -ne $true -and -not $PrintOnly) {
         Restore-DbaDatabase -SqlInstance $DestinationServer -DatabaseName $databasename -Recover
     }
 }
@@ -421,7 +427,8 @@ function Get-TRNFiles {
         $PriorToDate = Get-Date
     }
 
-    $trnFiles = $blobCollection | Where-Object { $_.bktype -eq 'LOG' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -gt $StartDateTime -and $_.bkdate -le $PriorToDate } | Sort-object { $_.bkdate } | ForEach-Object { $azureURL + $_.name }
+    $trnFiles = $blobCollection | Where-Object { $_.bktype -eq 'LOG' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -gt $StartDateTime -and $_.bkdate -lt $PriorToDate } | Sort-object { $_.bkdate } | ForEach-Object { $azureURL + $_.name }
+    $trnFiles += $blobCollection | Where-Object { $_.bktype -eq 'LOG' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -gt $StartDateTime -and $_.bkdate -ge $PriorToDate } | Sort-object { $_.bkdate } | Select-Object -First 1 { $azureURL + $_.name }
 
     return $trnFiles
 }
