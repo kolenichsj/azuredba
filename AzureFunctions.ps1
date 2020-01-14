@@ -495,15 +495,58 @@ function Remove-OldBlobs {
         [string]$StorageAccountName,
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$SasToken,
-        [int]$keepMinimumCount = 4, # keep at least this many backups
-        [int]$keepMinimumDays = 30 # only delete older than this number of days
+        [int]$keepMinimumDays = 35 # only delete older than this number of days
     )
 
-    $deleteOlderThan = (Get-Date).AddDays( - $keepMinimumDays)
+    $maxRestorePoint = (Get-Date).AddDays( - $keepMinimumDays)
+    
     $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
     $blobs = Get-AzStorageBlob -Context $Context -Container $ContainerName
-    $blobCollection = Get-BlobReferences -blobs $blobs
-    $grouped = $blobCollection | Group-Object -Property server, database, bktype | Where-Object { $_.count -gt $keepMinimumCount } 
-    $blobsToDelete = $grouped | ForEach-Object { $_.Group | Select-Object -First ($_.Count - $keepMinimumCount) | Where-Object { $_.bkdate -lt $deleteOlderThan } }
-    $blobsToDelete | ForEach-Object { Remove-AzStorageBlob -Blob $_.Name -Container $ContainerName -Context $context -WhatIf }
+    $oldBlobs = $blobs | Where-Object {$_.LastModified -lt $maxRestorePoint } # we want to keep everything before the max restore point, so don't even process it
+    $blobCollection = Get-BlobReferences -blobs $oldBlobs
+    $serverGroups = $blobCollection | Group-Object -Property server
+    $blobsToKeepSet = New-Object 'System.Collections.Generic.HashSet[string]'
+
+    foreach ($server in $serverGroups) {
+        $databaseGroups = $server.Group | Group-Object -Property database
+        Write-Debug "Processing $($server.Name)"
+
+        foreach ($database in $databaseGroups) {
+            #need most recent full
+            #need most recent diff after most recent full (if one exists)
+            #need all logs between maxRestorePoint and Last Diff or full (whichever is later)
+            Write-Debug "Processing $($database.Name)"
+            $groupedFiles = $database.Group | Group-Object -Property bktype -AsHashTable
+            $mostRecentFull = $groupedFiles['FULL'] | Sort-Object { $_.bkdate } -Descending | Select-Object -First 1
+
+            if ([string]::IsNullOrEmpty($mostRecentFull.Name)) {
+                Write-Warning "Could not find full backup for $($database.Name) on  $($server.Name)"
+            }
+            else {
+                $mostRecentDiff = $groupedFiles['DIFF'] | Where-Object { $_.bkdate -gt $mostRecentFull.bkdate } | Sort-object { $_.bkdate } -Descending | Select-Object -First 1
+            }
+
+            if ([string]::IsNullOrEmpty($mostRecentDiff.Name)) {
+                $groupedFiles['LOG'].Group | Where-Object {$_.bkdate -ge $mostRecentFull.bkdate } | ForEach-Object {$blobsToKeepSet.Add($_.Name) | out-null}
+            }
+            else {
+                $groupedFiles['LOG'].Group | Where-Object {$_.bkdate -ge $mostRecentDiff.bkdate } | ForEach-Object {$blobsToKeepSet.Add($_.Name) | out-null}
+            }
+            
+            if (-not ($blobsToKeepSet.Count -eq 0 -or [string]::IsNullOrEmpty($mostRecentDiff.Name))) {
+                $blobsToKeepSet.Add($mostRecentDiff.Name) | out-null
+            }
+
+            if ($blobsToKeepSet.Count -gt 0) {
+                $blobsToKeepSet.Add($mostRecentFull.Name) | out-null
+            }
+        }
+    }
+        
+    foreach ($blob in $oldBlobs)
+    {
+        if (-not $blobsToKeepSet.Contains($blob.Name)) {
+            Remove-AzStorageBlob -Blob $blob.Name -Container $ContainerName -Context $context
+        }
+    }
 }
