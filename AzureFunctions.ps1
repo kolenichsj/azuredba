@@ -150,8 +150,7 @@ function Restore-FullDiffFile {
     }
 
     try {
-        $restoreFiles = @{ }
-        $restoreFiles += $mostRecentFullFile
+        $restoreFiles = @( $mostRecentFullFile)
 
         if (-Not [string]::IsNullOrEmpty($mostRecentDiffFile)) {
             $restoreFiles += $mostRecentDiffFile
