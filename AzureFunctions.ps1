@@ -501,56 +501,73 @@ function Restore-AGDatabase {
         [string]$ContainerName,        
         [string]$TargetDatabaseName = '',
         [parameter(Mandatory = $true)][ValidateNotNull()]
-        [string]$AvailabilityGroupName='',        
+        [string]$AvailabilityGroupName = '',        
         [parameter(ParameterSetName = 'Token')][ValidateNotNull()]
         [string]$SasToken,
         [parameter(ParameterSetName = 'Blobs')]
         [Microsoft.WindowsAzure.Commands.Common.Storage.ResourceModel.AzureStorageBlob[]]$blobs,
+        [parameter(ParameterSetName = 'Blobs')]
+        [parameter(ParameterSetName = 'BlobCollection')]
+        [Microsoft.WindowsAzure.Commands.Storage.AzureStorageContext]$Context,
         [parameter(ParameterSetName = 'BlobCollection')]
         [BlobReference[]]$blobCollection,
-        [switch]$UseCopyOnly
+        [parameter(ParameterSetName = 'Token')]
+        [parameter(ParameterSetName = 'Blobs')]
+        [parameter(ParameterSetName = 'BlobCollection')]
+        [switch]$UseCopyOnly,
+        [parameter(ParameterSetName = 'Token')]
+        [parameter(ParameterSetName = 'TrnOnly')]
+        [switch]$UseTrnOnly
     )
 
-    if (-not [string]::IsNullOrEmpty($SasToken) ) {
-        $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
-        $blobs = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename
-    }
-
-    if ($null -ne $blobs) {
-        $blobCollection = Get-BlobReferences -blobs $blobs
-    }
-
-    Write-Verbose "blob count: $($blobCollection.Count)`r`n `$databasename: $databasename`r`n`$serverList: $serverList"
-    $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
-        
-    if ($UseCopyOnly) {
-        $mostRecentCopy = $blobCollection | Where-Object { $_.bktype -eq 'FULL_COPY_ONLY' -and $_.database -eq $databasename -and $serverList.Contains($_.server) } | Sort-Object { $_.bkdate } -Descending | Select-Object -First 1
-        if ([string]::IsNullOrEmpty($mostRecentCopy)) {
-            Write-Error "Unable to find file for `$databasename: $databasename`r`n`$serverList: $serverList"
+    if (-not $UseTrnOnly) {
+        if (-not [string]::IsNullOrEmpty($SasToken) ) {
+            $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
+            $blobs = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename
         }
 
-        $mostRecentCopyFile = "$($azureURL)$($mostRecentCopy.Name)"
-        Write-Verbose "$($mostRecentCopyFile): $mostRecentCopyFile"
-        Restore-FullDiffFile -mostRecentFullFile $mostRecentCopyFile -DestinationServer $DestinationServer -StorageAccountName $StorageAccountName
+        if ($null -ne $blobs) {
+            $blobCollection = Get-BlobReferences -blobs $blobs
+        }
+
+        Write-Verbose "blob count: $($blobCollection.Count)`r`n `$databasename: $databasename`r`n`$serverList: $serverList"
+        $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
+        
+        if ($UseCopyOnly) {
+            $mostRecentCopy = $blobCollection | Where-Object { $_.bktype -eq 'FULL_COPY_ONLY' -and $_.database -eq $databasename -and $serverList.Contains($_.server) } | Sort-Object { $_.bkdate } -Descending | Select-Object -First 1
+            if ([string]::IsNullOrEmpty($mostRecentCopy)) {
+                Write-Error "Unable to find file for `$databasename: $databasename`r`n`$serverList: $serverList"
+            }
+
+            $mostRecentCopyFile = "$($azureURL)$($mostRecentCopy.Name)"
+            Write-Verbose "$($mostRecentCopyFile): $mostRecentCopyFile"
+            Restore-FullDiffFile -mostRecentFullFile $mostRecentCopyFile -DestinationServer $DestinationServer -StorageAccountName $StorageAccountName
+        }
+        else {
+            $mostRecentFull = $blobCollection | Where-Object { $_.bktype -eq 'FULL' -and $_.database -eq $databasename -and $serverList.Contains($_.server) } | Sort-Object { $_.bkdate } -Descending | Select-Object -First 1
+            $mostRecentDiff = $blobCollection | Where-Object { $_.bktype -eq 'DIFF' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -gt $mostRecentFull.bkdate } | Sort-object { $_.bkdate } -Descending | Select-Object -First 1
+            $mostRecentFullFile = "$($azureURL)$($mostRecentFull.Name)"
+            $mostRecentDiffFile = "$($azureURL)$($mostRecentDiff.Name)"
+
+            Write-Verbose "$($mostRecentFullFile): $mostRecentFullFile`r`n$($mostRecentDiffFile): $mostRecentDiffFile"
+            Restore-FullDiffFile -mostRecentFullFile $mostRecentFullFile -mostRecentDiffFile $mostRecentDiffFile -DestinationServer $DestinationServer -StorageAccountName $StorageAccountName
+        }
+    }
+
+    if ($null -eq $context) {
+        $trnBlobCollection = $blobCollection
     }
     else {
-        $mostRecentFull = $blobCollection | Where-Object { $_.bktype -eq 'FULL' -and $_.database -eq $databasename -and $serverList.Contains($_.server) } | Sort-Object { $_.bkdate } -Descending | Select-Object -First 1
-        $mostRecentDiff = $blobCollection | Where-Object { $_.bktype -eq 'DIFF' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -gt $mostRecentFull.bkdate } | Sort-object { $_.bkdate } -Descending | Select-Object -First 1
-        $mostRecentFullFile = "$($azureURL)$($mostRecentFull.Name)"
-        $mostRecentDiffFile = "$($azureURL)$($mostRecentDiff.Name)"
+        if ($serverList.Count -eq 1) {
+            $trnBlobs = Get-AzStorageBlob -Context $context -Container $ContainerName -Blob "$serverList/$databasename/LOG/*.trn"
+        }
+        else {
+            $trnBlobs = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename
+        }
 
-        Write-Verbose "$($mostRecentFullFile): $mostRecentFullFile`r`n$($mostRecentDiffFile): $mostRecentDiffFile"
-        Restore-FullDiffFile -mostRecentFullFile $mostRecentFullFile -mostRecentDiffFile $mostRecentDiffFile -DestinationServer $DestinationServer -StorageAccountName $StorageAccountName
+        $trnBlobCollection = Get-BlobReferences -blobs $trnBlobs
     }
 
-    if ($serverList.Count -eq 1){
-        $trnBlobs = Get-AzStorageBlob -Context $context -Container $ContainerName -Blob "$serverList/$databasename/LOG/*.trn"
-    }
-    else{
-        $trnBlobs = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename
-    }
-
-    $trnBlobCollection = Get-BlobReferences -blobs $trnBlobs
     $StartDateTime = Get-BackupFinishDate -databasename $databasename -DestinationServer $DestinationServer
     $trnFiles = $trnBlobCollection | Where-Object { $_.bktype -eq 'LOG' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -ge $StartDateTime } | Sort-object { $_.bkdate } | ForEach-Object { $azureURL + $_.name }
     Restore-TRNLogs -databasename $databasename -DestinationServer $DestinationServer -trnfiles $trnfiles -StorageAccountName $StorageAccountName -NoRecovery $true
@@ -573,7 +590,7 @@ function Remove-OldBlobs {
     
     $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
     $blobs = Get-AzStorageBlob -Context $Context -Container $ContainerName
-    $oldBlobs = $blobs | Where-Object {$_.LastModified -lt $maxRestorePoint } # we want to keep everything before the max restore point, so don't even process it
+    $oldBlobs = $blobs | Where-Object { $_.LastModified -lt $maxRestorePoint } # we want to keep everything before the max restore point, so don't even process it
     $blobCollection = Get-BlobReferences -blobs $oldBlobs
     $serverGroups = $blobCollection | Group-Object -Property server
     $blobsToKeepSet = New-Object 'System.Collections.Generic.HashSet[string]'
@@ -598,10 +615,10 @@ function Remove-OldBlobs {
             }
 
             if ([string]::IsNullOrEmpty($mostRecentDiff.Name)) {
-                $groupedFiles['LOG'].Group | Where-Object {$_.bkdate -ge $mostRecentFull.bkdate } | ForEach-Object {$blobsToKeepSet.Add($_.Name) | out-null}
+                $groupedFiles['LOG'].Group | Where-Object { $_.bkdate -ge $mostRecentFull.bkdate } | ForEach-Object { $blobsToKeepSet.Add($_.Name) | out-null }
             }
             else {
-                $groupedFiles['LOG'].Group | Where-Object {$_.bkdate -ge $mostRecentDiff.bkdate } | ForEach-Object {$blobsToKeepSet.Add($_.Name) | out-null}
+                $groupedFiles['LOG'].Group | Where-Object { $_.bkdate -ge $mostRecentDiff.bkdate } | ForEach-Object { $blobsToKeepSet.Add($_.Name) | out-null }
             }
             
             if (-not ($blobsToKeepSet.Count -eq 0 -or [string]::IsNullOrEmpty($mostRecentDiff.Name))) {
@@ -614,8 +631,7 @@ function Remove-OldBlobs {
         }
     }
         
-    foreach ($blob in $oldBlobs)
-    {
+    foreach ($blob in $oldBlobs) {
         if (-not $blobsToKeepSet.Contains($blob.Name)) {
             Remove-AzStorageBlob -Blob $blob.Name -Container $ContainerName -Context $context
         }
