@@ -552,7 +552,7 @@ function Restore-AGDatabase {
 
     $trnBlobCollection = Get-BlobReferences -blobs $trnBlobs
     $StartDateTime = Get-BackupFinishDate -databasename $databasename -DestinationServer $DestinationServer
-    $trnFiles = $trnBlobCollection | Where-Object { $_.bktype -eq 'LOG' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -gt $StartDateTime } | Sort-object { $_.bkdate } | ForEach-Object { $azureURL + $_.name }
+    $trnFiles = $trnBlobCollection | Where-Object { $_.bktype -eq 'LOG' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -ge $StartDateTime } | Sort-object { $_.bkdate } | ForEach-Object { $azureURL + $_.name }
     Restore-TRNLogs -databasename $databasename -DestinationServer $DestinationServer -trnfiles $trnfiles -StorageAccountName $StorageAccountName -NoRecovery $true
     Invoke-Sqlcmd -ServerInstance $DestinationServer -Query "ALTER DATABASE [$databasename] SET HADR AVAILABILITY GROUP = [$AvailabilityGroupName]"
 }
