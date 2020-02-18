@@ -156,7 +156,7 @@ function Restore-FullDiffFile {
             $restoreFiles += $mostRecentDiffFile
         }
 
-        Restore-DbaDatabase -SqlInstance $DestinationServer -DatabaseName $DestinationDBName -Path $restoreFiles -FileMapping $FileMapping -AzureCredential $StorageAccountName -WithReplace  -NoRecovery
+        Restore-DbaDatabase -SqlInstance $DestinationServer -DatabaseName $DestinationDBName -Path $restoreFiles -FileMapping $FileMapping -AzureCredential $StorageAccountName -WithReplace -NoRecovery
     }
     catch {
         Write-Error $_.Exception.ToString()
@@ -432,6 +432,77 @@ function Get-TRNFiles {
     return $trnFiles
 }
 
+function Restore-BlobDatabase {
+    [CmdletBinding()]
+    param (
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$server, 
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$databasename, 
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$ContainerName,
+        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [string]$StorageAccountName,
+        [datetime]$PriorToDate,
+        [parameter(ParameterSetName = 'Token')][ValidateNotNull()]
+        [string]$SasToken,
+        [parameter(ParameterSetName = 'Blobs')]
+        [Microsoft.WindowsAzure.Commands.Common.Storage.ResourceModel.AzureStorageBlob[]]$blobs,
+        [parameter(ParameterSetName = 'BlobCollection')]
+        [BlobReference[]]$blobCollection,
+        [Parameter(Mandatory = $true)][ValidateNotNull()]
+        [string] $DestinationServer        
+    )
+
+    $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
+
+    if (-not [string]::IsNullOrEmpty($SasToken) ) {
+        $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
+        $blobs = Get-AzStorageBlob -Context $Context -Container $ContainerName -Prefix "$servername/$databasename"
+    }
+
+    if ($null -ne $blobs) {
+        $blobCollection = Get-BlobReferences -blobs $blobs
+    }
+
+    $fullDiffFileParams = @{
+        serverList = $server
+        databasename = $databasename
+        ContainerName = $ContainerName
+        StorageAccountName = $StorageAccountName
+        PriorToDate = $PriorToDate
+        blobCollection = $blobCollection
+    }
+
+    [Tuple[string, string]]$fullDiffFile = Get-MostRecentFullDiffFile @fullDiffFileParams
+    
+    $restoreParams = @{
+        StorageAccountName = $StorageAccountName
+        DestinationServer = $DestinationServer
+        mostRecentFullFile = $azureURL + $fullDiffFile.Item1
+        mostRecentDiffFile = $azureURL + $fullDiffFile.Item2
+    }
+
+    Restore-FullDiffFile @restoreParams
+
+    $StartDateTime = Get-BackupFinishDate -databasename $databasename -DestinationServer $DestinationServer
+    $trnFiles = $blobCollection | Where-Object { $_.bktype -eq 'LOG' `
+    -and $_.database -eq $databasename `
+    -and $_.server -eq $server `
+    -and $_.bkdate -gt $StartDateTime `
+    -and $_.bkdate -le $PriorToDate} | Sort-object { $_.bkdate } | ForEach-Object { $azureURL + $_.name }
+    
+    $TRNParams = @{
+        databasename = $databasename
+        DestinationServer = $DestinationServer
+        StorageAccountName = $StorageAccountName
+        $stopAtDate = $PriorToDate
+        trnFiles = $trnFiles
+    }
+
+    Restore-TRNLogs @TRNParams
+}
+
 function Restore-LatestDatabase {
     param
     (
@@ -448,8 +519,8 @@ function Restore-LatestDatabase {
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$SasToken,
         [string]$TargetDatabaseName = "",
-        [switch]$UseCopyOnly#,
-        #[switch]$NoRecovery
+        [switch]$UseCopyOnly,
+        [switch]$NoRecovery
     )
 
     $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
@@ -482,7 +553,7 @@ function Restore-LatestDatabase {
     $blobCollection = Get-BlobReferences -blobs $blobs
     $StartDateTime = Get-BackupFinishDate -databasename $databasename -DestinationServer $DestinationServer
     $trnFiles = $blobCollection | Where-Object { $_.bktype -eq 'LOG' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -gt $StartDateTime } | Sort-object { $_.bkdate } | ForEach-Object { $azureURL + $_.name }
-    Restore-TRNLogs -databasename $databasename -DestinationServer $DestinationServer -trnfiles $trnfiles -StorageAccountName $StorageAccountName
+    Restore-TRNLogs -databasename $databasename -DestinationServer $DestinationServer -trnfiles $trnfiles -StorageAccountName $StorageAccountName -NoRecovery:$NoRecovery
 }
 
 
