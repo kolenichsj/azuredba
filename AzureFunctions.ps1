@@ -654,7 +654,8 @@ function Remove-OldBlobs {
         [string]$StorageAccountName,
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$SasToken,
-        [int]$keepMinimumDays = 35 # only delete older than this number of days
+        [int]$keepMinimumDays = 35, # only delete older than this number of days
+        [switch]$WhatIf
     )
 
     $maxRestorePoint = (Get-Date).AddDays( - $keepMinimumDays)
@@ -701,10 +702,10 @@ function Remove-OldBlobs {
             }
         }
     }
-        
+    
     foreach ($blob in $oldBlobs) {
         if (-not $blobsToKeepSet.Contains($blob.Name)) {
-            Remove-AzStorageBlob -Blob $blob.Name -Container $ContainerName -Context $context
+            Remove-AzStorageBlob -Blob $blob.Name -Container $ContainerName -Context $context -WhatIf:$WhatIf
         }
     }
 }
