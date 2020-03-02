@@ -179,9 +179,9 @@ function Restore-TRNLogs {
     )
 
     foreach ($file in $trnfiles) {
-        $sqlRestore = "Restore DATABASE [$databasename] FROM URL = '$file'  WITH  CREDENTIAL ='$StorageAccountName', REPLACE, NoRecovery, BLOCKSIZE = 512" # BLOCKSIZE = 4096
+        $sqlRestore = "Restore DATABASE [$databasename] FROM URL = '$file'  WITH  CREDENTIAL ='$StorageAccountName', REPLACE, NoRecovery, BLOCKSIZE = 512 " # BLOCKSIZE = 4096
         if ($null -ne $stopAtDate) {
-            $sqlRestore += "STOPAT = '$stopAtDate'"
+            $sqlRestore += ", STOPAT = '$stopAtDate'"
         }
         
         Write-Host $sqlRestore
@@ -436,14 +436,14 @@ function Restore-BlobDatabase {
     [CmdletBinding()]
     param (
         [parameter(Mandatory = $true)][ValidateNotNull()]
-        [string]$server, 
+        [string]$servername, 
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$databasename, 
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$ContainerName,
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$StorageAccountName,
-        [datetime]$PriorToDate,
+        [datetime]$PriorToDate = [System.DateTime]::Now,
         [parameter(ParameterSetName = 'Token')][ValidateNotNull()]
         [string]$SasToken,
         [parameter(ParameterSetName = 'Blobs')]
@@ -466,7 +466,7 @@ function Restore-BlobDatabase {
     }
 
     $fullDiffFileParams = @{
-        serverList = $server
+        serverList = $servername
         databasename = $databasename
         ContainerName = $ContainerName
         StorageAccountName = $StorageAccountName
@@ -488,7 +488,7 @@ function Restore-BlobDatabase {
     $StartDateTime = Get-BackupFinishDate -databasename $databasename -DestinationServer $DestinationServer
     $trnFiles = $blobCollection | Where-Object { $_.bktype -eq 'LOG' `
     -and $_.database -eq $databasename `
-    -and $_.server -eq $server `
+    -and $_.server -eq $servername `
     -and $_.bkdate -gt $StartDateTime `
     -and $_.bkdate -le $PriorToDate} | Sort-object { $_.bkdate } | ForEach-Object { $azureURL + $_.name }
     
@@ -496,7 +496,7 @@ function Restore-BlobDatabase {
         databasename = $databasename
         DestinationServer = $DestinationServer
         StorageAccountName = $StorageAccountName
-        $stopAtDate = $PriorToDate
+        stopAtDate = $PriorToDate
         trnFiles = $trnFiles
     }
 
