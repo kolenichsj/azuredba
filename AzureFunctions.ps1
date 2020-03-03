@@ -187,7 +187,7 @@ function Restore-TRNLogs {
         Write-Host $sqlRestore
         
         if (-not $PrintOnly) {
-            Invoke-Sqlcmd -ServerInstance $DestinationServer -Database 'master' -Query $sqlRestore -Verbose
+            Invoke-Sqlcmd -ServerInstance $DestinationServer -Database 'master' -Query $sqlRestore -Verbose -QueryTimeout 65535
         }
 
         #Restore-DbaDatabase -SqlInstance $DestinationServer -DatabaseName $databasename -Path $file -AzureCredential $StorageAccountName -WithReplace -BlockSize 512 -NoRecovery -Continue # -Verbose
