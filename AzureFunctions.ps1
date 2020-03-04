@@ -487,7 +487,7 @@ function Restore-BlobDatabase {
         StorageAccountName = $StorageAccountName
         DestinationServer = $DestinationServer
         mostRecentFullFile = $azureURL + $fullDiffFile.Item1
-        mostRecentDiffFile = $azureURL + $fullDiffFile.Item2
+        mostRecentDiffFile = if ([string]::IsNullOrEmpty($fullDiffFile.Item2)) {$null} else {$azureURL + $fullDiffFile.Item2}
     }
 
     Restore-FullDiffFile @restoreParams
