@@ -458,8 +458,10 @@ function Restore-BlobDatabase {
 
     if (-not [string]::IsNullOrEmpty($SasToken) ) {
         $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
+        Write-Verbose "Prefix $servername/$databasename"
         $blobs = Get-AzStorageBlob -Context $Context -Container $ContainerName -Prefix "$servername/$databasename"
     }
+    
 
     if ($null -ne $blobs) {
         $blobCollection = Get-BlobReferences -blobs $blobs
@@ -472,6 +474,11 @@ function Restore-BlobDatabase {
         StorageAccountName = $StorageAccountName
         PriorToDate = $PriorToDate
         blobCollection = $blobCollection
+    }
+
+    foreach ($key in $fullDiffFileParams.Keys)
+    {
+        Write-Verbose "$key - > $($fullDiffFileParams[$key])"
     }
 
     [Tuple[string, string]]$fullDiffFile = Get-MostRecentFullDiffFile @fullDiffFileParams
