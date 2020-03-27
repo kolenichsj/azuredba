@@ -652,15 +652,20 @@ function Remove-OldBlobs {
         [string]$ContainerName,
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$StorageAccountName,
-        [parameter(Mandatory = $true)][ValidateNotNull()]
+        [parameter(ParameterSetName = 'Token',Mandatory = $true)][ValidateNotNull()]
         [string]$SasToken,
+        [parameter(ParameterSetName = 'Context',Mandatory = $true)][ValidateNotNull()]
+        [Microsoft.WindowsAzure.Commands.Storage.AzureStorageContext]$Context,
         [int]$keepMinimumDays = 35, # only delete older than this number of days
         [switch]$WhatIf
     )
 
     $maxRestorePoint = (Get-Date).AddDays( - $keepMinimumDays)
     
-    $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
+    if ($null -eq $Context )
+    {
+        $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
+    }
     $blobs = Get-AzStorageBlob -Context $Context -Container $ContainerName
     $oldBlobs = $blobs | Where-Object { $_.LastModified -lt $maxRestorePoint } # we want to keep everything before the max restore point, so don't even process it
     $blobCollection = Get-BlobReferences -blobs $oldBlobs
