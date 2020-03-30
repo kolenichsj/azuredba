@@ -34,7 +34,7 @@ function Get-BlobsForDatabase {
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$ContainerName,
         [parameter(Mandatory = $true)][ValidateNotNull()]
-        [Microsoft.WindowsAzure.Commands.Storage.AzureStorageContext]$Context
+        [Microsoft.Azure.Commands.Common.Authentication.Abstractions.IStorageContext]$Context
     )
     return Get-AzStorageBlob -Context $context -Container $ContainerName -Blob "*/$databasename/*"
 }
@@ -468,16 +468,15 @@ function Restore-BlobDatabase {
     }
 
     $fullDiffFileParams = @{
-        serverList = $servername
-        databasename = $databasename
-        ContainerName = $ContainerName
+        serverList         = $servername
+        databasename       = $databasename
+        ContainerName      = $ContainerName
         StorageAccountName = $StorageAccountName
-        PriorToDate = $PriorToDate
-        blobCollection = $blobCollection
+        PriorToDate        = $PriorToDate
+        blobCollection     = $blobCollection
     }
 
-    foreach ($key in $fullDiffFileParams.Keys)
-    {
+    foreach ($key in $fullDiffFileParams.Keys) {
         Write-Verbose "$key - > $($fullDiffFileParams[$key])"
     }
 
@@ -485,26 +484,26 @@ function Restore-BlobDatabase {
     
     $restoreParams = @{
         StorageAccountName = $StorageAccountName
-        DestinationServer = $DestinationServer
+        DestinationServer  = $DestinationServer
         mostRecentFullFile = $azureURL + $fullDiffFile.Item1
-        mostRecentDiffFile = if ([string]::IsNullOrEmpty($fullDiffFile.Item2)) {$null} else {$azureURL + $fullDiffFile.Item2}
+        mostRecentDiffFile = if ([string]::IsNullOrEmpty($fullDiffFile.Item2)) { $null } else { $azureURL + $fullDiffFile.Item2 }
     }
 
     Restore-FullDiffFile @restoreParams
 
     $StartDateTime = Get-BackupFinishDate -databasename $databasename -DestinationServer $DestinationServer
     $trnFiles = $blobCollection | Where-Object { $_.bktype -eq 'LOG' `
-    -and $_.database -eq $databasename `
-    -and $_.server -eq $servername `
-    -and $_.bkdate -gt $StartDateTime `
-    -and $_.bkdate -le $PriorToDate} | Sort-object { $_.bkdate } | ForEach-Object { $azureURL + $_.name }
+            -and $_.database -eq $databasename `
+            -and $_.server -eq $servername `
+            -and $_.bkdate -gt $StartDateTime `
+            -and $_.bkdate -le $PriorToDate } | Sort-object { $_.bkdate } | ForEach-Object { $azureURL + $_.name }
     
     $TRNParams = @{
-        databasename = $databasename
-        DestinationServer = $DestinationServer
+        databasename       = $databasename
+        DestinationServer  = $DestinationServer
         StorageAccountName = $StorageAccountName
-        stopAtDate = $PriorToDate
-        trnFiles = $trnFiles
+        stopAtDate         = $PriorToDate
+        trnFiles           = $trnFiles
     }
 
     Restore-TRNLogs @TRNParams
@@ -584,24 +583,37 @@ function Restore-AGDatabase {
         [string]$SasToken,
         [parameter(ParameterSetName = 'Blobs')]
         [Microsoft.WindowsAzure.Commands.Common.Storage.ResourceModel.AzureStorageBlob[]]$blobs,
-        [parameter(ParameterSetName = 'Blobs')]
-        [parameter(ParameterSetName = 'BlobCollection')]
-        [Microsoft.WindowsAzure.Commands.Storage.AzureStorageContext]$Context,
+        [parameter(ParameterSetName = 'Context', Mandatory = $true)][ValidateNotNull()]
+        [Microsoft.Azure.Commands.Common.Authentication.Abstractions.IStorageContext]$Context,
         [parameter(ParameterSetName = 'BlobCollection')]
         [BlobReference[]]$blobCollection,
         [parameter(ParameterSetName = 'Token')]
         [parameter(ParameterSetName = 'Blobs')]
         [parameter(ParameterSetName = 'BlobCollection')]
+        [parameter(ParameterSetName = 'Context')]
         [switch]$UseCopyOnly,
         [parameter(ParameterSetName = 'Token')]
         [parameter(ParameterSetName = 'TrnOnly')]
+        [parameter(ParameterSetName = 'BlobCollection')]
+        [parameter(ParameterSetName = 'Context')]
         [switch]$UseTrnOnly
     )
 
+    $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
+
     if (-not $UseTrnOnly) {
-        if (-not [string]::IsNullOrEmpty($SasToken) ) {
+        if ($null -eq $Context) {
             $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
-            $blobs = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename
+        }
+
+        if ($null -eq $blobs) {
+            $blobList = New-Object System.Collections.ArrayList
+            foreach ($server in $serverList) {
+                $response = Get-AzStorageBlob -Context $strg.Context -Container $ContainerName -Blob "$server/$databasename/*/*.bak" 
+                $response | ForEach-Object { $blobList.Add($_) }
+            }
+
+            $blobs = $blobList.ToArray()
         }
 
         if ($null -ne $blobs) {
@@ -609,7 +621,6 @@ function Restore-AGDatabase {
         }
 
         Write-Verbose "blob count: $($blobCollection.Count)`r`n `$databasename: $databasename`r`n`$serverList: $serverList"
-        $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
         
         if ($UseCopyOnly) {
             $mostRecentCopy = $blobCollection | Where-Object { $_.bktype -eq 'FULL_COPY_ONLY' -and $_.database -eq $databasename -and $serverList.Contains($_.server) } | Sort-Object { $_.bkdate } -Descending | Select-Object -First 1
@@ -627,7 +638,7 @@ function Restore-AGDatabase {
             $mostRecentFullFile = "$($azureURL)$($mostRecentFull.Name)"
             $mostRecentDiffFile = "$($azureURL)$($mostRecentDiff.Name)"
 
-            Write-Verbose "$($mostRecentFullFile): $mostRecentFullFile`r`n$($mostRecentDiffFile): $mostRecentDiffFile"
+            Write-Verbose "`$mostRecentFullFile: $mostRecentFullFile`r`n`$mostRecentDiffFile: $mostRecentDiffFile"
             Restore-FullDiffFile -mostRecentFullFile $mostRecentFullFile -mostRecentDiffFile $mostRecentDiffFile -DestinationServer $DestinationServer -StorageAccountName $StorageAccountName
         }
     }
@@ -636,13 +647,13 @@ function Restore-AGDatabase {
         $trnBlobCollection = $blobCollection
     }
     else {
-        if ($serverList.Count -eq 1) {
-            $trnBlobs = Get-AzStorageBlob -Context $context -Container $ContainerName -Blob "$serverList/$databasename/LOG/*.trn"
-        }
-        else {
-            $trnBlobs = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename
+        $trnblobList = New-Object System.Collections.ArrayList
+        foreach ($server in $serverList) {
+            $response = Get-AzStorageBlob -Context $strg.Context -Container $ContainerName -Blob "$server/$databasename/LOG/*.trn" 
+            $response | ForEach-Object { $trnblobList.Add($_) }
         }
 
+        $trnblobs = $trnblobList.ToArray()
         $trnBlobCollection = Get-BlobReferences -blobs $trnBlobs
     }
 
@@ -659,18 +670,17 @@ function Remove-OldBlobs {
         [string]$ContainerName,
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$StorageAccountName,
-        [parameter(ParameterSetName = 'Token',Mandatory = $true)][ValidateNotNull()]
+        [parameter(ParameterSetName = 'Token', Mandatory = $true)][ValidateNotNull()]
         [string]$SasToken,
-        [parameter(ParameterSetName = 'Context',Mandatory = $true)][ValidateNotNull()]
-        [Microsoft.WindowsAzure.Commands.Storage.AzureStorageContext]$Context,
+        [parameter(ParameterSetName = 'Context', Mandatory = $true)][ValidateNotNull()]
+        [Microsoft.Azure.Commands.Common.Authentication.Abstractions.IStorageContext]$Context,
         [int]$keepMinimumDays = 35, # only delete older than this number of days
         [switch]$WhatIf
     )
 
     $maxRestorePoint = (Get-Date).AddDays( - $keepMinimumDays)
     
-    if ($null -eq $Context )
-    {
+    if ($null -eq $Context ) {
         $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
     }
     $blobs = Get-AzStorageBlob -Context $Context -Container $ContainerName
