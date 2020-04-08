@@ -636,7 +636,12 @@ function Restore-AGDatabase {
             $mostRecentFull = $blobCollection | Where-Object { $_.bktype -eq 'FULL' -and $_.database -eq $databasename -and $serverList.Contains($_.server) } | Sort-Object { $_.bkdate } -Descending | Select-Object -First 1
             $mostRecentDiff = $blobCollection | Where-Object { $_.bktype -eq 'DIFF' -and $_.database -eq $databasename -and $serverList.Contains($_.server) -and $_.bkdate -gt $mostRecentFull.bkdate } | Sort-object { $_.bkdate } -Descending | Select-Object -First 1
             $mostRecentFullFile = "$($azureURL)$($mostRecentFull.Name)"
-            $mostRecentDiffFile = "$($azureURL)$($mostRecentDiff.Name)"
+            if ([string]::IsNullOrEmpty($mostRecentDiff)) {
+                $mostRecentDiffFile = $null
+            }
+            else {
+                $mostRecentDiffFile = "$($azureURL)$($mostRecentDiff.Name)"
+            }
 
             Write-Verbose "`$mostRecentFullFile: $mostRecentFullFile`r`n`$mostRecentDiffFile: $mostRecentDiffFile"
             Restore-FullDiffFile -mostRecentFullFile $mostRecentFullFile -mostRecentDiffFile $mostRecentDiffFile -DestinationServer $DestinationServer -StorageAccountName $StorageAccountName
