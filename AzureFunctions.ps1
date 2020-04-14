@@ -436,7 +436,7 @@ function Restore-BlobDatabase {
     [CmdletBinding()]
     param (
         [parameter(Mandatory = $true)][ValidateNotNull()]
-        [string]$servername, 
+        [string[]]$serverList, 
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [string]$databasename, 
         [parameter(Mandatory = $true)][ValidateNotNull()]
@@ -446,9 +446,11 @@ function Restore-BlobDatabase {
         [datetime]$PriorToDate = [System.DateTime]::Now,
         [parameter(ParameterSetName = 'Token')][ValidateNotNull()]
         [string]$SasToken,
-        [parameter(ParameterSetName = 'Blobs')]
+        [parameter(ParameterSetName = 'Blobs')][ValidateNotNull()]
         [Microsoft.WindowsAzure.Commands.Common.Storage.ResourceModel.AzureStorageBlob[]]$blobs,
-        [parameter(ParameterSetName = 'BlobCollection')]
+        [parameter(ParameterSetName = 'Context', Mandatory = $true)][ValidateNotNull()]
+        [Microsoft.Azure.Commands.Common.Authentication.Abstractions.IStorageContext]$Context,
+        [parameter(ParameterSetName = 'BlobCollection')][ValidateNotNull()]
         [BlobReference[]]$blobCollection,
         [Parameter(Mandatory = $true)][ValidateNotNull()]
         [string] $DestinationServer        
@@ -456,19 +458,28 @@ function Restore-BlobDatabase {
 
     $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
 
-    if (-not [string]::IsNullOrEmpty($SasToken) ) {
+    if ($null -eq $Context) {
+        Write-Verbose 'Getting context'
         $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
-        Write-Verbose "Prefix $servername/$databasename"
-        $blobs = Get-AzStorageBlob -Context $Context -Container $ContainerName -Prefix "$servername/$databasename"
     }
-    
+
+    if ($null -eq $blobs) {
+        $blobList = New-Object System.Collections.ArrayList
+        foreach ($server in $serverList) {
+            Write-Verbose "Getting blobs: $server/$databasename/*/*.bak" 
+            $response = Get-AzStorageBlob -Context $strg.Context -Container $ContainerName -Blob "$server/$databasename/*/*.bak" 
+            $response | ForEach-Object { $blobList.Add($_) }
+        }
+
+        $blobs = $blobList.ToArray()
+    }
 
     if ($null -ne $blobs) {
         $blobCollection = Get-BlobReferences -blobs $blobs
     }
 
     $fullDiffFileParams = @{
-        serverList         = $servername
+        serverList         = $serverList
         databasename       = $databasename
         ContainerName      = $ContainerName
         StorageAccountName = $StorageAccountName
