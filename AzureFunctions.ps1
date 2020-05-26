@@ -768,10 +768,10 @@ function Remove-OldBlobs {
             }
 
             if ([string]::IsNullOrEmpty($mostRecentDiff.Name)) {
-                $groupedFiles['LOG'].Group | Where-Object { $_.bkdate -ge $mostRecentFull.bkdate } | ForEach-Object { $blobsToKeepSet.Add($_.Name) | out-null }
+                $groupedFiles['LOG'] | Where-Object { $_.bkdate -ge $mostRecentFull.bkdate } | ForEach-Object { $blobsToKeepSet.Add($_.Name) | out-null }
             }
             else {
-                $groupedFiles['LOG'].Group | Where-Object { $_.bkdate -ge $mostRecentDiff.bkdate } | ForEach-Object { $blobsToKeepSet.Add($_.Name) | out-null }
+                $groupedFiles['LOG'] | Where-Object { $_.bkdate -ge $mostRecentDiff.bkdate } | ForEach-Object { $blobsToKeepSet.Add($_.Name) | out-null }
             }
             
             if (-not ($blobsToKeepSet.Count -eq 0 -or [string]::IsNullOrEmpty($mostRecentDiff.Name))) {
