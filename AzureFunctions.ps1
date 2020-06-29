@@ -24,7 +24,7 @@ function Get-BlobsForServer {
         [Microsoft.WindowsAzure.Commands.Storage.AzureStorageContext]$Context
     )
 
-    return Get-AzStorageBlob -Context $context -Container $ContainerName -Prefix $servername
+    return Get-AzStorageBlob -Context $Context -Container $ContainerName -Prefix $servername
 }
 
 function Get-BlobsForDatabase {
@@ -36,7 +36,7 @@ function Get-BlobsForDatabase {
         [parameter(Mandatory = $true)][ValidateNotNull()]
         [Microsoft.Azure.Commands.Common.Authentication.Abstractions.IStorageContext]$Context
     )
-    return Get-AzStorageBlob -Context $context -Container $ContainerName -Blob "*/$databasename/*"
+    return Get-AzStorageBlob -Context $Context -Container $ContainerName -Blob "*/$databasename/*"
 }
 
 function Get-BlobReferences {
@@ -241,17 +241,30 @@ function Get-MostRecentCopyOnlyFile {
         [string]$SasToken,
         [parameter(ParameterSetName = 'Blobs')][ValidateNotNull()]
         [Microsoft.WindowsAzure.Commands.Common.Storage.ResourceModel.AzureStorageBlob[]]$blobs,
+        [parameter(ParameterSetName = 'Context', Mandatory = $true)][ValidateNotNull()]
+        [Microsoft.Azure.Commands.Common.Authentication.Abstractions.IStorageContext]$Context,
         [parameter(ParameterSetName = 'BlobCollection')][ValidateNotNull()]
         [BlobReference[]]$blobCollection,
         [switch]$AsURL
     )
 
-    if (-not [string]::IsNullOrEmpty($SasToken) ) {
-        $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
-        $blobs = Get-BlobsForDatabase -ContainerName $ContainerName -Context $Context -databasename $databasename
-    }
+    if ($null -eq $blobCollection) {
+        if ($null -eq $blobs) {
+            if ($null -eq $Context) {
+                Write-Verbose 'Getting context'
+                $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
+            }
 
-    if ($null -ne $blobs) {
+            $blobList = New-Object System.Collections.ArrayList
+            foreach ($server in $serverList) {
+                Write-Verbose "Getting blobs: $server/$databasename/*/*.bak" 
+                $response = Get-AzStorageBlob -Context $Context -Container $ContainerName -Blob "$server/$databasename/*/*.bak" 
+                $response | ForEach-Object { $blobList.Add($_) }
+            }
+
+            $blobs = $blobList.ToArray()
+        }
+
         $blobCollection = Get-BlobReferences -blobs $blobs
     }
 
@@ -296,23 +309,23 @@ function Get-MostRecentFullDiffFile {
         [switch]$AsURL
     )
 
-    if ($null -eq $Context) {
-        Write-Verbose 'Getting context'
-        $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
-    }
+    if ($null -eq $blobCollection) {
+        if ($null -eq $blobs) {
+            if ($null -eq $Context) {
+                Write-Verbose 'Getting context'
+                $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
+            }
 
-    if ($null -eq $blobs) {
-        $blobList = New-Object System.Collections.ArrayList
-        foreach ($server in $serverList) {
-            Write-Verbose "Getting blobs: $server/$databasename/*/*.bak" 
-            $response = Get-AzStorageBlob -Context $Context -Container $ContainerName -Blob "$server/$databasename/*/*.bak" 
-            $response | ForEach-Object { $blobList.Add($_) }
+            $blobList = New-Object System.Collections.ArrayList
+            foreach ($server in $serverList) {
+                Write-Verbose "Getting blobs: $server/$databasename/*/*.bak" 
+                $response = Get-AzStorageBlob -Context $Context -Container $ContainerName -Blob "$server/$databasename/*/*.bak" 
+                $response | ForEach-Object { $blobList.Add($_) }
+            }
+
+            $blobs = $blobList.ToArray()
         }
 
-        $blobs = $blobList.ToArray()
-    }
-
-    if ($null -ne $blobs) {
         $blobCollection = Get-BlobReferences -blobs $blobs
     }
 
@@ -488,26 +501,27 @@ function Restore-BlobDatabase {
 
     $azureURL = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/"
 
-    if ($null -eq $Context) {
-        Write-Verbose 'Getting context'
-        $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
-    }
+    if ($null -eq $blobCollection) {
+        if ($null -eq $blobs) {
+            if ($null -eq $Context) {
+                Write-Verbose 'Getting context'
+                $Context = New-AzStorageContext -StorageAccountName $StorageAccountName -SasToken $SasToken
+            }
+    
+            $blobList = New-Object System.Collections.ArrayList
+            foreach ($server in $serverList) {
+                Write-Verbose "Getting blobs: $server/$databasename/*/*.bak" 
+                $response = Get-AzStorageBlob -Context $Context -Container $ContainerName -Blob "$server/$databasename/*/*.bak" 
+                $response | ForEach-Object { $blobList.Add($_) }
+            }
 
-    if ($null -eq $blobs) {
-        $blobList = New-Object System.Collections.ArrayList
-        foreach ($server in $serverList) {
-            Write-Verbose "Getting blobs: $server/$databasename/*/*.bak" 
-            $response = Get-AzStorageBlob -Context $Context -Container $ContainerName -Blob "$server/$databasename/*/*.bak" 
-            $response | ForEach-Object { $blobList.Add($_) }
+            $blobs = $blobList.ToArray()
         }
 
-        $blobs = $blobList.ToArray()
-    }
-
-    if ($null -ne $blobs) {
+        Write-Verbose "Getting references"
         $blobCollection = Get-BlobReferences -blobs $blobs
     }
-
+    
     $fullDiffFileParams = @{
         serverList         = $serverList
         databasename       = $databasename
