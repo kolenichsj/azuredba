@@ -305,7 +305,7 @@ function Get-MostRecentFullDiffFile {
         $blobList = New-Object System.Collections.ArrayList
         foreach ($server in $serverList) {
             Write-Verbose "Getting blobs: $server/$databasename/*/*.bak" 
-            $response = Get-AzStorageBlob -Context $strg.Context -Container $ContainerName -Blob "$server/$databasename/*/*.bak" 
+            $response = Get-AzStorageBlob -Context $Context -Container $ContainerName -Blob "$server/$databasename/*/*.bak" 
             $response | ForEach-Object { $blobList.Add($_) }
         }
 
@@ -497,7 +497,7 @@ function Restore-BlobDatabase {
         $blobList = New-Object System.Collections.ArrayList
         foreach ($server in $serverList) {
             Write-Verbose "Getting blobs: $server/$databasename/*/*.bak" 
-            $response = Get-AzStorageBlob -Context $strg.Context -Container $ContainerName -Blob "$server/$databasename/*/*.bak" 
+            $response = Get-AzStorageBlob -Context $Context -Container $ContainerName -Blob "$server/$databasename/*/*.bak" 
             $response | ForEach-Object { $blobList.Add($_) }
         }
 
@@ -663,7 +663,7 @@ function Restore-AGDatabase {
         if ($null -eq $blobs) {
             $blobList = New-Object System.Collections.ArrayList
             foreach ($server in $serverList) {
-                $response = Get-AzStorageBlob -Context $strg.Context -Container $ContainerName -Blob "$server/$databasename/*/*.bak" 
+                $response = Get-AzStorageBlob -Context $Context -Container $ContainerName -Blob "$server/$databasename/*/*.bak" 
                 $response | ForEach-Object { $blobList.Add($_) }
             }
 
@@ -708,7 +708,7 @@ function Restore-AGDatabase {
     else {
         $trnblobList = New-Object System.Collections.ArrayList
         foreach ($server in $serverList) {
-            $response = Get-AzStorageBlob -Context $strg.Context -Container $ContainerName -Blob "$server/$databasename/LOG/*.trn" 
+            $response = Get-AzStorageBlob -Context $Context -Container $ContainerName -Blob "$server/$databasename/LOG/*.trn" 
             $response | ForEach-Object { $trnblobList.Add($_) }
         }
 
