@@ -512,7 +512,7 @@ function Restore-BlobDatabase {
             foreach ($server in $serverList) {
                 Write-Verbose "Getting blobs: $server/$databasename/*" 
                 $response = Get-AzStorageBlob -Context $Context -Container $ContainerName -Blob "$server/$databasename/*" 
-                $response | ForEach-Object { $blobList.Add($_) }
+                $blobList.AddRange($response)
             }
 
             $blobs = $blobList.ToArray()
@@ -553,11 +553,19 @@ function Restore-BlobDatabase {
     Restore-FullDiffFile @restoreParams
 
     $StartDateTime = Get-BackupFinishDate -databasename $TargetDatabaseName -DestinationServer $DestinationServer
-    $trnFiles = $blobCollection | Where-Object { $_.bktype -eq 'LOG' `
+    Write-Verbose "Getting TRN files after $StartDateTime"
+
+    $trnBlobsTmp = $blobCollection | Where-Object { $_.bktype -eq 'LOG' `
             -and $_.database -eq $databasename `
-            -and $_.server -eq $servername `
-            -and $_.bkdate -gt $StartDateTime `
-            -and $_.bkdate -le $PriorToDate } | Sort-object { $_.bkdate } | ForEach-Object { $azureURL + $_.name }
+            -and $serverList.Contains($_.server)  `
+            -and $_.bkdate -gt $StartDateTime } | Sort-object { $_.bkdate }
+    
+    $trnBlobs = New-Object System.Collections.ArrayList
+    $response = $trnBlobsTmp | Where-Object { $_.bkdate -le $PriorToDate }
+    $trnBlobs.AddRange($response)
+    $nextTrnBlob = $trnBlobsTmp | Where-Object { $_.bkdate -gt $PriorToDate } | Select-Object -First 1
+    if ($null -ne $nextTrnBlob) { $trnBlobs.Add($nextTrnBlob) }
+    $trnFiles = $trnBlobs | ForEach-Object { $azureURL + $_.name }
     
     $TRNParams = @{
         databasename       = $TargetDatabaseName
