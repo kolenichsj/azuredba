@@ -511,8 +511,8 @@ function Restore-BlobDatabase {
             $blobList = New-Object System.Collections.ArrayList
             foreach ($server in $serverList) {
                 Write-Verbose "Getting blobs: $server/$databasename/*" 
-                $response = Get-AzStorageBlob -Context $Context -Container $ContainerName -Blob "$server/$databasename/*" 
-                $blobList.AddRange($response)
+                $response = Get-AzStorageBlob -Context $Context -Container $ContainerName -Blob "$server/$databasename/*"
+                if ($null -ne $response) { $blobList.AddRange($response) }
             }
 
             $blobs = $blobList.ToArray()
